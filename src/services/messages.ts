@@ -7,6 +7,7 @@
 import { sql } from "../config.ts";
 import { getOrCreateMainBranch } from "./branches.ts";
 import { assembleLens } from "./lens.ts";
+import { generateEmbedding, storeEmbedding } from "./embeddings.ts";
 
 const DEFAULT_CONTEXT_LIMIT = 20;
 
@@ -71,6 +72,11 @@ export async function appendMessage(data: {
     SET head_id = ${message.id}
     WHERE id = ${branchId}
   `;
+
+  // Fire-and-forget: generate and store embedding (never blocks message flow)
+  generateEmbedding(content)
+    .then((emb) => storeEmbedding(message.id, emb))
+    .catch((err) => console.error("Embedding generation failed (non-blocking):", err.message));
 
   // Assemble context using the lens algorithm (recency + anchors + token budget)
   const context = await assembleLens(branchId, message.id);

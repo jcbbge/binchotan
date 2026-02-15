@@ -7,17 +7,20 @@
  */
 
 import { sql } from "../config.ts";
+import { findSimilar } from "./embeddings.ts";
 
 export type LensConfig = {
   recencyLimit: number;
   maxTokens: number;
   includeAnchors: boolean;
+  semanticLimit: number;
 };
 
 export const DEFAULT_LENS_CONFIG: LensConfig = {
   recencyLimit: 20,
   maxTokens: 4096,
   includeAnchors: true,
+  semanticLimit: 5,
 };
 
 type LensMessage = {
@@ -98,6 +101,50 @@ export async function assembleLens(
         createdAt: row.created_at,
         isAnchor: row.is_anchor,
       });
+    }
+  }
+
+  // Semantic retrieval: if the latest message has an embedding, find similar messages
+  // not already in the context set and merge them in.
+  if (cfg.semanticLimit > 0 && startId) {
+    try {
+      const [embRow] = await sql`
+        SELECT embedding FROM charcoal.embeddings WHERE message_id = ${startId}
+      `;
+      if (embRow?.embedding) {
+        const embedding = typeof embRow.embedding === "string"
+          ? JSON.parse(embRow.embedding)
+          : embRow.embedding;
+        const excludeIds = Array.from(seen);
+        const similar = await findSimilar(embedding, cfg.semanticLimit, excludeIds);
+
+        if (similar.length > 0) {
+          const similarIds = similar.map((s) => s.messageId);
+          const semanticRows: any[] = await sql`
+            SELECT id, role, content, created_at, is_anchor
+            FROM charcoal.messages
+            WHERE id = ANY(${similarIds}::uuid[])
+            ORDER BY created_at ASC
+          `;
+          for (const row of semanticRows) {
+            if (!seen.has(row.id)) {
+              seen.add(row.id);
+              messages.push({
+                id: row.id,
+                role: row.role,
+                content: row.content,
+                createdAt: row.created_at,
+                isAnchor: row.is_anchor,
+              });
+            }
+          }
+          // Re-sort chronologically after adding semantic results
+          messages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        }
+      }
+    } catch (err) {
+      // Graceful degradation: semantic retrieval failure doesn't break the lens
+      console.error("Semantic retrieval failed (non-blocking):", (err as Error).message);
     }
   }
 
