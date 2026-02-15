@@ -7,7 +7,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { createBranch, listBranches, getBranch } from "../services/branches.ts";
+import { createBranch, listBranches, getBranch, mergeBranch } from "../services/branches.ts";
 
 const createBranchSchema = z.object({
   name: z.string().min(1).max(200),
@@ -71,5 +71,43 @@ branches.get("/:id", async (c) => {
     );
   }
 });
+
+// POST /api/branches/:id/merge — merge a source branch into this branch
+const mergeBranchSchema = z.object({
+  sourceBranchId: z.string().uuid(),
+  strategy: z.enum(["fast-forward"]).default("fast-forward"),
+});
+
+branches.post(
+  "/:id/merge",
+  zValidator("json", mergeBranchSchema, (result, c) => {
+    if (!result.success) {
+      return c.json({ success: false, error: { code: "VALIDATION_ERROR", message: "Request validation failed" } }, 400);
+    }
+  }),
+  async (c) => {
+    try {
+      const targetBranchId = c.req.param("id");
+      const { sourceBranchId, strategy } = c.req.valid("json");
+      const result = await mergeBranch({ targetBranchId, sourceBranchId, strategy });
+      return c.json({ success: true, data: result });
+    } catch (error) {
+      const err = error as Error & { code?: string };
+      console.error("Error merging branch:", err);
+
+      if (err.code === "TARGET_NOT_FOUND" || err.code === "SOURCE_NOT_FOUND") {
+        return c.json({ success: false, error: { code: "NOT_FOUND", message: err.message } }, 404);
+      }
+      if (err.code === "SELF_MERGE" || err.code === "UNKNOWN_STRATEGY") {
+        return c.json({ success: false, error: { code: err.code, message: err.message } }, 400);
+      }
+
+      return c.json(
+        { success: false, error: { code: "MERGE_ERROR", message: err.message } },
+        500,
+      );
+    }
+  },
+);
 
 export default branches;
