@@ -6,8 +6,32 @@
 
 import { sql } from "../config.ts";
 import { getOrCreateMainBranch } from "./branches.ts";
+import { assembleLens } from "./lens.ts";
 
 const DEFAULT_CONTEXT_LIMIT = 20;
+
+/**
+ * Get context for a branch, optionally from a specific message.
+ * If no messageId, uses the branch's current head.
+ */
+export async function getContextForBranch(
+  branchId: string,
+  messageId?: string,
+  limit: number = DEFAULT_CONTEXT_LIMIT,
+): Promise<Array<{ role: string; content: string }>> {
+  let resolvedMessageId = messageId;
+
+  if (!resolvedMessageId) {
+    const [branch] = await sql`
+      SELECT head_id FROM charcoal.branches WHERE id = ${branchId}
+    `;
+    if (!branch) throw new Error(`Branch ${branchId} not found`);
+    if (!branch.head_id) return []; // empty branch
+    resolvedMessageId = branch.head_id;
+  }
+
+  return getContext(resolvedMessageId!, limit);
+}
 
 export async function appendMessage(data: {
   branchId?: string;
@@ -48,8 +72,8 @@ export async function appendMessage(data: {
     WHERE id = ${branchId}
   `;
 
-  // Assemble context: walk parent_id chain for last N messages
-  const context = await getContext(message.id, DEFAULT_CONTEXT_LIMIT);
+  // Assemble context using the lens algorithm (recency + anchors + token budget)
+  const context = await assembleLens(branchId, message.id);
 
   return {
     messageId: message.id,
@@ -85,4 +109,23 @@ export async function getContext(
   `;
 
   return rows.map((r: any) => ({ role: r.role, content: r.content }));
+}
+
+/**
+ * Toggle the is_anchor flag on a message.
+ */
+export async function toggleAnchor(
+  messageId: string,
+  isAnchor: boolean,
+): Promise<{ id: string; isAnchor: boolean }> {
+  const [row] = await sql`
+    UPDATE charcoal.messages
+    SET is_anchor = ${isAnchor}
+    WHERE id = ${messageId}
+    RETURNING id, is_anchor
+  `;
+
+  if (!row) throw new Error(`Message ${messageId} not found`);
+
+  return { id: row.id, isAnchor: row.is_anchor };
 }
