@@ -11,7 +11,7 @@ import { requestId } from "hono/request-id";
 import { serve } from "bun";
 import { getConfig, displayConfig, testConnection, gracefulShutdown } from "./config.ts";
 import branchRoutes from "./routes/branches.ts";
-import messageRoutes from "./routes/messages.ts";
+import messageRoutes, { contextRoutes } from "./routes/messages.ts";
 
 const config = getConfig();
 
@@ -49,6 +49,7 @@ app.get("/", (c) => {
 const api = new Hono();
 api.route("/branches", branchRoutes);
 api.route("/messages", messageRoutes);
+api.route("/context", contextRoutes);
 app.route("/api", api);
 
 app.notFound((c) => {
