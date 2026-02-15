@@ -25,3 +25,10 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Planning docs (local only)
+prd.md
+prd_supplemental.md
+
+# Workspace
+/workspace
