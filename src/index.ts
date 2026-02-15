@@ -12,6 +12,7 @@ import { serve } from "bun";
 import { getConfig, displayConfig, testConnection, gracefulShutdown } from "./config.ts";
 import branchRoutes from "./routes/branches.ts";
 import messageRoutes, { contextRoutes } from "./routes/messages.ts";
+import lensRoutes from "./routes/lens.ts";
 import { startScribe } from "./services/scribe.ts";
 
 const config = getConfig();
@@ -51,6 +52,7 @@ const api = new Hono();
 api.route("/branches", branchRoutes);
 api.route("/messages", messageRoutes);
 api.route("/context", contextRoutes);
+api.route("/lens", lensRoutes);
 app.route("/api", api);
 
 app.notFound((c) => {

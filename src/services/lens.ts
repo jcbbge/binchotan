@@ -48,12 +48,46 @@ function estimateTokens(content: string): number {
  * 3. Merge recency + anchors, deduplicate by id, sort by created_at ASC
  * 4. Apply token budget: trim oldest non-anchor messages first
  */
+/**
+ * Load lens config from DB for a branch, falling back to global default, then hardcoded.
+ */
+async function loadLensConfig(branchId: string): Promise<LensConfig> {
+  try {
+    // Try branch-specific config
+    let [row] = await sql`
+      SELECT recency_limit, max_tokens, include_anchors, semantic_limit
+      FROM charcoal.lens_config
+      WHERE branch_id = ${branchId}
+    `;
+    if (!row) {
+      // Try global default
+      [row] = await sql`
+        SELECT recency_limit, max_tokens, include_anchors, semantic_limit
+        FROM charcoal.lens_config
+        WHERE branch_id IS NULL
+      `;
+    }
+    if (row) {
+      return {
+        recencyLimit: row.recency_limit,
+        maxTokens: row.max_tokens,
+        includeAnchors: row.include_anchors,
+        semanticLimit: row.semantic_limit,
+      };
+    }
+  } catch (err) {
+    console.error("Failed to load lens config from DB (using defaults):", (err as Error).message);
+  }
+  return { ...DEFAULT_LENS_CONFIG };
+}
+
 export async function assembleLens(
   branchId: string,
   messageId?: string,
   config?: Partial<LensConfig>,
 ): Promise<Array<{ role: string; content: string }>> {
-  const cfg = { ...DEFAULT_LENS_CONFIG, ...config };
+  const dbConfig = await loadLensConfig(branchId);
+  const cfg = { ...dbConfig, ...config };
 
   // Resolve starting message — use branch head if not specified
   let startId = messageId;
