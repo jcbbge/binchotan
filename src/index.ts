@@ -12,6 +12,7 @@ import { serve } from "bun";
 import { getConfig, displayConfig, testConnection, gracefulShutdown } from "./config.ts";
 import branchRoutes from "./routes/branches.ts";
 import messageRoutes, { contextRoutes } from "./routes/messages.ts";
+import { startScribe } from "./services/scribe.ts";
 
 const config = getConfig();
 
@@ -87,6 +88,8 @@ const server = serve({
 console.log(`🚀 Server running on http://localhost:${config.port}`);
 console.log(`   Health check: http://localhost:${config.port}/health`);
 console.log("\n✨ Ready to receive requests\n");
+
+startScribe();
 
 const shutdown = async () => {
   console.log("\n🛑 Shutting down gracefully...");
