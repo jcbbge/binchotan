@@ -1,5 +1,6 @@
 -- Scribe notification trigger
 -- Sends NOTIFY on new message insert so the Scribe background worker can process it.
+-- Idempotent: safe to re-run.
 
 BEGIN;
 
@@ -11,8 +12,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER messages_notify_insert
-    AFTER INSERT ON charcoal.messages
-    FOR EACH ROW EXECUTE FUNCTION charcoal.notify_new_message();
+DO $$ BEGIN
+    CREATE TRIGGER messages_notify_insert
+        AFTER INSERT ON charcoal.messages
+        FOR EACH ROW EXECUTE FUNCTION charcoal.notify_new_message();
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
 
 COMMIT;
