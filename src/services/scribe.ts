@@ -5,13 +5,17 @@
  * 1. Generate and store embeddings
  * 2. Detect topic shifts (cosine similarity vs recent context)
  *
- * Uses polling every 30s to find unprocessed messages (messages without
- * embeddings). The migration adds a Postgres NOTIFY trigger on message
- * insert for future real-time handling once Bun SQL supports LISTEN.
+ * Uses Postgres LISTEN/NOTIFY as the PRIMARY mechanism for real-time
+ * processing. The migration 002_scribe_notify.sql creates a trigger:
+ *   AFTER INSERT ON charcoal.messages → pg_notify('charcoal_new_message', NEW.id::text)
+ *
+ * A 30s polling loop runs as FALLBACK to catch anything missed during
+ * reconnection windows.
  */
 
-import { sql } from "../config.ts";
+import { sql, getConfig } from "../config.ts";
 import { generateEmbedding, storeEmbedding } from "./embeddings.ts";
+import postgres from "postgres";
 
 const POLL_INTERVAL_MS = 30_000;
 const TOPIC_SHIFT_THRESHOLD = Number(
@@ -134,18 +138,58 @@ async function pollUnprocessed(): Promise<void> {
 }
 
 /**
+ * Start the LISTEN/NOTIFY listener on a dedicated postgres connection.
+ * Reconnects automatically if the connection drops.
+ */
+async function startListener(): Promise<void> {
+  const config = getConfig();
+  const listenSql = postgres(config.databaseUrl, {
+    max: 1,
+    idle_timeout: 0,
+    max_lifetime: null,
+    connection: {
+      application_name: "binchotan_scribe_listen",
+    },
+  });
+
+  // postgres.js .listen() handles reconnection automatically —
+  // if the connection drops, it re-subscribes on reconnect.
+  try {
+    await listenSql.listen("charcoal_new_message", async (messageId: string) => {
+      console.log(`[scribe] NOTIFY received for message ${messageId}`);
+      try {
+        await processMessage(messageId);
+      } catch (err) {
+        console.error(`[scribe] Failed to process notified message ${messageId}:`, (err as Error).message);
+      }
+    });
+    console.log("[scribe] Listening on charcoal_new_message");
+  } catch (err) {
+    console.error("[scribe] LISTEN connection failed:", (err as Error).message);
+    console.log("[scribe] Retrying LISTEN in 5s...");
+    await new Promise((r) => setTimeout(r, 5_000));
+    return startListener();
+  }
+}
+
+/**
  * Start the Scribe background worker.
  *
- * Polls every 30s for messages missing embeddings. The Postgres NOTIFY
- * trigger (002_scribe_notify.sql) is in place for future real-time
- * handling once the driver supports LISTEN callbacks.
+ * PRIMARY: Postgres LISTEN/NOTIFY for real-time message processing.
+ * FALLBACK: Polls every 30s for messages missing embeddings.
  */
 export function startScribe(): void {
   console.log("[scribe] Background worker started");
   console.log(`[scribe] Topic shift threshold: ${TOPIC_SHIFT_THRESHOLD}`);
-  console.log(`[scribe] Poll interval: ${POLL_INTERVAL_MS / 1000}s`);
+  console.log(`[scribe] Poll interval: ${POLL_INTERVAL_MS / 1000}s (fallback)`);
 
-  // Polling loop
+  // PRIMARY: Start LISTEN/NOTIFY listener
+  startListener().catch((err) => {
+    console.error("[scribe] Failed to start listener:", (err as Error).message);
+    console.log("[scribe] Falling back to polling only");
+  });
+
+  // FALLBACK: Polling loop
   setInterval(async () => {
     try {
       await pollUnprocessed();
